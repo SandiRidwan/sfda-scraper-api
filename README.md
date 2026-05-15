@@ -31,7 +31,7 @@
 <br/>
 
 <div align="center">
-  <video src="https://github.com/user-attachments/assets/9434d90e-65eb-4df4-8545-787197a4cb8b" 
+  <video src="https://github.com/user-attachments/assets/23e6e240-fa4f-4d65-b83f-a84ef72563f8" 
          width="860" 
          controls 
          autoplay 
