@@ -25,8 +25,15 @@
 <!-- Replace YOUR_VIDEO_ID with actual YouTube video ID -->
 [![SFDA Drug Scraper Demo](https://img.youtube.com/vi/YOUR_VIDEO_ID/maxresdefault.jpg)](https://www.youtube.com/watch?v=YOUR_VIDEO_ID)
 
-<!-- GIF demo — upload via GitHub Issue trick, paste link below -->
-<!-- <img src="https://github.com/user-attachments/assets/PASTE_YOUR_LINK_HERE" width="860" /> -->
+<div align="center">
+  <video src="https://github.com/user-attachments/assets/9434d90e-65eb-4df4-8545-787197a4cb8b" 
+         width="860" 
+         controls 
+         autoplay 
+         loop 
+         muted>
+  </video>
+</div>
 
 </div>
 
