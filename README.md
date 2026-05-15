@@ -21,9 +21,14 @@
 ## Demo
 
 <div align="center">
+  <a href="https://youtube.com/watch?v=-kWFCRtUua8">
+    <img src="thumbnail.png" width="860" alt="Watch full demo on YouTube" />
+  </a>
+  <br/>
+  <sub><i>Click to watch — scraper run, monitor progress, Excel output walkthrough</i></sub>
+</div>
 
-<!-- Replace YOUR_VIDEO_ID with actual YouTube video ID -->
-[![SFDA Drug Scraper Demo](https://img.youtube.com/vi/YOUR_VIDEO_ID/maxresdefault.jpg)](https://www.youtube.com/watch?v=YOUR_VIDEO_ID)
+<br/>
 
 <div align="center">
   <video src="https://github.com/user-attachments/assets/9434d90e-65eb-4df4-8545-787197a4cb8b" 
