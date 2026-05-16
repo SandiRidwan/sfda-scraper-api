@@ -1,0 +1,238 @@
+# app/services/scraper_service.py
+import uuid
+import time
+import random
+import sqlite3
+import logging
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Optional
+
+import requests as std_requests
+
+from app.database import get_connection
+from app.config import get_settings
+from app.services.telegram_service import (
+    notify_job_started, notify_job_done,
+    notify_job_failed, notify_milestone
+)
+
+logger = logging.getLogger(__name__)
+settings = get_settings()
+
+SFDA_URL = "https://www.sfda.gov.sa/en/drug-registration"
+DRUGS_ENDPOINT = "https://www.sfda.gov.sa/GetDrugs.php"
+WORKERS = 3
+CHUNK_SIZE = 20
+
+
+def create_job() -> str:
+    job_id = str(uuid.uuid4())[:8]
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO jobs (id, status, created_at) VALUES (?, 'queued', datetime('now'))",
+            (job_id,)
+        )
+        conn.commit()
+        logger.info(f"Job {job_id} created in DB")
+        return job_id
+    finally:
+        conn.close()
+
+
+def get_job(job_id: str) -> Optional[dict]:
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if not row:
+            return None
+        job = dict(row)
+        job["progress_pct"] = round((job["done_pages"] / job["total_pages"]) * 100, 1) if job["total_pages"] > 0 else 0.0
+        if job["started_at"] and job["finished_at"]:
+            start = datetime.fromisoformat(job["started_at"])
+            end = datetime.fromisoformat(job["finished_at"])
+            job["duration_seconds"] = (end - start).total_seconds()
+        else:
+            job["duration_seconds"] = None
+        return job
+    finally:
+        conn.close()
+
+
+def fetch_page(page: int) -> tuple[int, list[dict], Optional[str]]:
+    session = std_requests.Session()
+    session.headers.update({
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": SFDA_URL
+    })
+    params = {"page": page, "pageSize": settings.sfda_page_size}
+
+    for attempt in range(4):
+        try:
+            resp = session.get(DRUGS_ENDPOINT, params=params, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+
+            drugs = []
+            if isinstance(data, list):
+                drugs = data
+            elif isinstance(data, dict):
+                inner = data.get("data", {})
+                if isinstance(inner, dict):
+                    result_obj = inner.get("result")
+                    if isinstance(result_obj, dict):
+                        drugs = result_obj.get("results") or []
+                    if not drugs:
+                        drugs = inner.get("results") or []
+                elif isinstance(inner, list):
+                    drugs = inner
+
+            logger.info(f"Page {page}: fetched {len(drugs)} drugs")
+            return page, drugs, None
+
+        except Exception as e:
+            if attempt < 3:
+                wait = (2 ** attempt) + random.uniform(0, 1)
+                logger.warning(f"Page {page} attempt {attempt+1} failed: {e}. Retry in {wait:.1f}s")
+                time.sleep(wait)
+            else:
+                logger.error(f"Page {page} permanently failed: {e}")
+                return page, [], str(e)
+
+    return page, [], "Max retries exceeded"
+
+
+def save_drugs_batch(conn: sqlite3.Connection, job_id: str, drugs: list[dict]):
+    rows = []
+    for d in drugs:
+        if not isinstance(d, dict):
+            continue
+        company = d.get("company") or {}
+        country_obj = company.get("country") or {}
+        drug_type = d.get("drugType") or {}
+        auth_status = d.get("authorizationStatus") or {}
+        route = d.get("administrationRoute") or {}
+        dosage_form = d.get("pharmaceuticalForm") or {}
+        rows.append((
+            job_id,
+            str(d.get("registerNumber") or ""),
+            str(d.get("tradeName") or ""),
+            str(d.get("scientificName") or ""),
+            str(company.get("nameEn") or ""),
+            str(country_obj.get("nameEn") or ""),
+            str(drug_type.get("nameEn") or ""),
+            str(auth_status.get("nameEn") or ""),
+            str(company.get("nameEn") or ""),
+            str(dosage_form.get("nameEn") or ""),
+            str(route.get("nameEn") or ""),
+            str(d.get("strength") or ""),
+        ))
+    if rows:
+        conn.executemany("""
+            INSERT OR IGNORE INTO drugs
+            (job_id, registration_no, trade_name, scientific_name,
+             manufacturer, country, category, status, license_holder,
+             dosage_form, route, strength)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, rows)
+        conn.commit()
+        logger.info(f"Saved {len(rows)} drugs to DB")
+
+
+def run_scraper(job_id: str, max_pages: Optional[int] = None, notify_telegram: bool = True):
+    conn = get_connection()
+    start_time = time.time()
+    logger.info(f"run_scraper called: job={job_id}, max_pages={max_pages}")
+    try:
+        _, first_drugs, err = fetch_page(1)
+        if err:
+            raise Exception(f"Failed to fetch page 1: {err}")
+        total_pages = max_pages or settings.sfda_max_pages
+        logger.info(f"Job {job_id}: {len(first_drugs)} drugs from page 1, scraping {total_pages} pages")
+        conn.execute(
+            "UPDATE jobs SET status='running', total_pages=?, started_at=datetime('now') WHERE id=?",
+            (total_pages, job_id)
+        )
+        conn.commit()
+        if first_drugs:
+            save_drugs_batch(conn, job_id, first_drugs)
+        if notify_telegram:
+            notify_job_started(job_id, total_pages)
+        pages_remaining = list(range(2, total_pages + 1))
+        done_count = 1
+        drugs_count = len(first_drugs)
+        for chunk_start in range(0, len(pages_remaining), CHUNK_SIZE):
+            chunk = pages_remaining[chunk_start:chunk_start + CHUNK_SIZE]
+            with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+                futures = {pool.submit(fetch_page, page): page for page in chunk}
+                for future in as_completed(futures):
+                    page_num, drugs, error = future.result()
+                    if error:
+                        logger.warning(f"Page {page_num} failed: {error}")
+                    elif drugs:
+                        save_drugs_batch(conn, job_id, drugs)
+                        drugs_count += len(drugs)
+                    done_count += 1
+                    conn.execute(
+                        "UPDATE jobs SET done_pages=?, total_drugs=? WHERE id=?",
+                        (done_count, drugs_count, job_id)
+                    )
+                    conn.commit()
+                    if notify_telegram and done_count % 100 == 0:
+                        notify_milestone(job_id, done_count, total_pages, drugs_count)
+            time.sleep(random.uniform(settings.sfda_delay_min, settings.sfda_delay_max))
+        duration = time.time() - start_time
+        conn.execute(
+            "UPDATE jobs SET status='done', finished_at=datetime('now'), total_drugs=?, done_pages=? WHERE id=?",
+            (drugs_count, done_count, job_id)
+        )
+        conn.commit()
+        logger.info(f"Job {job_id} DONE: {drugs_count} drugs in {duration:.0f}s")
+        if notify_telegram:
+            notify_job_done(job_id, drugs_count, duration, done_count)
+    except Exception as e:
+        logger.error(f"Job {job_id} FAILED: {e}", exc_info=True)
+        conn.execute(
+            "UPDATE jobs SET status='failed', error=?, finished_at=datetime('now') WHERE id=?",
+            (str(e)[:500], job_id)
+        )
+        conn.commit()
+        if notify_telegram:
+            notify_job_failed(job_id, str(e))
+    finally:
+        conn.close()
+
+
+def query_drugs(job_id: str, page: int = 1, page_size: int = 50,
+                search: Optional[str] = None, country: Optional[str] = None,
+                manufacturer: Optional[str] = None) -> dict:
+    conn = get_connection()
+    try:
+        conditions = ["job_id = ?"]
+        params = [job_id]
+        if search:
+            conditions.append("(trade_name LIKE ? OR scientific_name LIKE ?)")
+            params.extend([f"%{search}%", f"%{search}%"])
+        if country:
+            conditions.append("country = ?")
+            params.append(country)
+        if manufacturer:
+            conditions.append("manufacturer LIKE ?")
+            params.append(f"%{manufacturer}%")
+        where_clause = " AND ".join(conditions)
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM drugs WHERE {where_clause}", params
+        ).fetchone()[0]
+        offset = (page - 1) * page_size
+        rows = conn.execute(
+            f"""SELECT registration_no, trade_name, scientific_name,
+                       manufacturer, country, category, status,
+                       license_holder, dosage_form, route, strength
+                FROM drugs WHERE {where_clause} LIMIT ? OFFSET ?""",
+            params + [page_size, offset]
+        ).fetchall()
+        return {"total": total, "page": page, "page_size": page_size, "data": [dict(r) for r in rows]}
+    finally:
+        conn.close()

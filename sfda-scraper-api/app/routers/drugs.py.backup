@@ -1,0 +1,146 @@
+# app/routers/drugs.py
+import io
+import datetime
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+from app.database import get_connection
+
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment
+
+router = APIRouter(prefix="/drugs", tags=["Drugs"])
+
+
+@router.get(
+    "/stats",
+    summary="Statistik data obat",
+    description="Top manufacturers, countries, categories dari data yang sudah di-scrape."
+)
+async def drug_stats(job_id: str):
+    conn = get_connection()
+    try:
+        countries = conn.execute("""
+            SELECT country, COUNT(*) as count
+            FROM drugs WHERE job_id=? AND country != ''
+            GROUP BY country ORDER BY count DESC LIMIT 10
+        """, (job_id,)).fetchall()
+
+        manufacturers = conn.execute("""
+            SELECT manufacturer, COUNT(*) as count
+            FROM drugs WHERE job_id=? AND manufacturer != ''
+            GROUP BY manufacturer ORDER BY count DESC LIMIT 10
+        """, (job_id,)).fetchall()
+
+        categories = conn.execute("""
+            SELECT category, COUNT(*) as count
+            FROM drugs WHERE job_id=? AND category != ''
+            GROUP BY category ORDER BY count DESC
+        """, (job_id,)).fetchall()
+
+        total = conn.execute(
+            "SELECT COUNT(*) FROM drugs WHERE job_id=?", (job_id,)
+        ).fetchone()[0]
+
+        return {
+            "total_drugs": total,
+            "top_countries": [dict(r) for r in countries],
+            "top_manufacturers": [dict(r) for r in manufacturers],
+            "categories": [dict(r) for r in categories]
+        }
+    finally:
+        conn.close()
+
+
+@router.get(
+    "/export/{job_id}",
+    summary="Export hasil scraping ke Excel (.xlsx)"
+)
+async def export_excel(job_id: str):
+    conn = get_connection()
+    try:
+        rows = conn.execute("""
+            SELECT registration_no, trade_name, scientific_name,
+                   manufacturer, country, category, status,
+                   license_holder, dosage_form, route, strength
+            FROM drugs WHERE job_id=?
+            ORDER BY trade_name
+        """, (job_id,)).fetchall()
+
+        if not rows:
+            raise HTTPException(status_code=404, detail="No data found for this job_id")
+
+        # ── Workbook setup ──────────────────────────────────────
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "SFDA Drugs"
+
+        # ── Header styling ──────────────────────────────────────
+        header_fill = PatternFill("solid", fgColor="1F4E79")
+        header_font = Font(bold=True, color="FFFFFF", size=11)
+        center = Alignment(horizontal="center", vertical="center")
+
+        headers = [
+            "Registration No", "Trade Name", "Scientific Name",
+            "Manufacturer", "Country", "Category", "Status",
+            "License Holder", "Dosage Form", "Route", "Strength"
+        ]
+
+        ws.row_dimensions[1].height = 22
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = center
+
+        # ── Data rows ───────────────────────────────────────────
+        even_fill = PatternFill("solid", fgColor="D6E4F0")
+
+        for row_idx, row in enumerate(rows, 2):
+            values = list(dict(row).values())
+            for col_idx, value in enumerate(values, 1):
+                cell = ws.cell(row=row_idx, column=col_idx, value=value or "")
+                cell.alignment = Alignment(vertical="center")
+                if row_idx % 2 == 0:
+                    cell.fill = even_fill
+
+        # ── Auto column width ───────────────────────────────────
+        for col in ws.columns:
+            max_len = max(
+                (len(str(cell.value or "")) for cell in col),
+                default=10
+            )
+            ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 45)
+
+        # ── Freeze top row ──────────────────────────────────────
+        ws.freeze_panes = "A2"
+
+        # ── Summary sheet ───────────────────────────────────────
+        ws2 = wb.create_sheet("Summary")
+        summary_data = [
+            ("Job ID", job_id),
+            ("Total Drugs", len(rows)),
+            ("Export Date", datetime.datetime.now().strftime("%Y-%m-%d %H:%M")),
+            ("Source", "SFDA Drug Registry — sfda.gov.sa"),
+        ]
+
+        ws2.column_dimensions["A"].width = 20
+        ws2.column_dimensions["B"].width = 40
+
+        title_font = Font(bold=True, size=12, color="1F4E79")
+        for r_idx, (key, val) in enumerate(summary_data, 1):
+            ws2.cell(row=r_idx, column=1, value=key).font = title_font
+            ws2.cell(row=r_idx, column=2, value=val)
+
+        # ── Stream response ─────────────────────────────────────
+        buffer = io.BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
+
+        filename = f"SFDA_drugs_{job_id}.xlsx"
+        return StreamingResponse(
+            buffer,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    finally:
+        conn.close()

@@ -1,0 +1,425 @@
+# app/services/scraper_service.py — Robust Scraper dengan Exponential Backoff
+import uuid
+import time
+import random
+import sqlite3
+import logging
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Optional, Tuple
+
+from curl_cffi import requests as cffi_requests
+
+from app.database import get_connection
+from app.config import get_settings
+from app.services.telegram_service import (
+    notify_job_started,
+    notify_job_done,
+    notify_job_failed,
+    notify_milestone
+)
+
+logger = logging.getLogger(__name__)
+settings = get_settings()
+
+SFDA_BASE_URL = "https://www.sfda.gov.sa"
+SFDA_API = "https://www.sfda.gov.sa/GetDrugs.php"
+WORKERS = 3
+CHUNK_SIZE = 20
+
+
+def create_job() -> str:
+    """Create job record di database"""
+    job_id = str(uuid.uuid4())[:8]
+    conn = get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO jobs 
+               (id, status, total_pages, done_pages, total_drugs, created_at)
+               VALUES (?, ?, ?, ?, ?, datetime('now'))""",
+            (job_id, "queued", 0, 0, 0)
+        )
+        conn.commit()
+        logger.info(f"✓ Job {job_id} created in DB")
+        return job_id
+    except Exception as e:
+        logger.error(f"✗ Failed to create job: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+def get_job(job_id: str) -> Optional[dict]:
+    """Get job status dari database"""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM jobs WHERE id=?",
+            (job_id,)
+        ).fetchone()
+
+        if not row:
+            return None
+
+        job = dict(row)
+        
+        # Calculate progress percentage
+        if job.get("total_pages", 0) > 0:
+            job["progress_pct"] = round((job["done_pages"] / job["total_pages"]) * 100, 1)
+        else:
+            job["progress_pct"] = 0.0
+
+        return job
+    finally:
+        conn.close()
+
+
+def fetch_page_with_backoff(
+    page: int,
+    max_retries: int = 5,
+    base_delay: float = 0.8
+) -> Tuple[int, list, Optional[str]]:
+    """
+    Fetch satu halaman dengan exponential backoff retry
+    
+    Delays: 1.5s, 3s, 6s, 12s, 24s (exponential 2^n)
+    Timeout naik per attempt: 30s → 40s → 50s → 60s → 70s
+    
+    Returns: (page_number, drugs_list, error_message)
+    """
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": SFDA_BASE_URL,
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+    
+    data = {
+        "TradeName": "",
+        "Agent": "",
+        "ManufacturerName": "",
+        "RegNo": "",
+        "page": page
+    }
+
+    for attempt in range(max_retries):
+        try:
+            # Timeout naik per attempt
+            timeout = 30 + (attempt * 10)
+            
+            # Delay sebelum request (exponential backoff dengan jitter)
+            if attempt > 0:
+                delay = base_delay * (2 ** (attempt - 1)) + random.uniform(0, 1)
+                logger.debug(f"  ⏳ Page {page} attempt {attempt+1}: waiting {delay:.1f}s...")
+                time.sleep(delay)
+
+            logger.debug(f"  📡 Page {page} attempt {attempt+1}: POST {SFDA_API} (timeout={timeout}s)")
+            
+            # Fetch dengan curl_cffi untuk TLS fingerprint bypass
+            response = cffi_requests.post(
+                SFDA_API,
+                data=data,
+                headers=headers,
+                timeout=timeout,
+                impersonate="chrome120"
+            )
+
+            # Check status code
+            if response.status_code == 200:
+                try:
+                    resp_json = response.json()
+                except Exception as json_err:
+                    logger.warning(f"  ⚠ Page {page}: JSON parse error: {json_err}")
+                    return page, [], f"JSON parse error: {str(json_err)[:100]}"
+
+                # Parse drugs dari response
+                drugs = []
+                if isinstance(resp_json, dict):
+                    # Try berbagai kemungkinan struktur response
+                    inner = resp_json.get("data", {})
+                    if isinstance(inner, dict):
+                        result = inner.get("result", {})
+                        if isinstance(result, dict):
+                            drugs = result.get("results", [])
+                    
+                    # Fallback: cek langsung di top level
+                    if not drugs:
+                        drugs = resp_json.get("results", [])
+                
+                elif isinstance(resp_json, list):
+                    drugs = resp_json
+
+                logger.info(f"  ✓ Page {page}: {len(drugs)} drugs | attempt {attempt+1}")
+                return page, drugs, None
+
+            elif response.status_code == 429:
+                # Rate limited
+                logger.warning(f"  ⚠ Page {page}: HTTP 429 Rate Limited (attempt {attempt+1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    continue
+                else:
+                    return page, [], f"HTTP 429 after {max_retries} attempts"
+
+            elif response.status_code == 400:
+                logger.warning(f"  ⚠ Page {page}: HTTP 400 Bad Request (attempt {attempt+1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    continue
+                else:
+                    return page, [], f"HTTP 400 Bad Request after {max_retries} attempts"
+
+            else:
+                logger.warning(f"  ⚠ Page {page}: HTTP {response.status_code} (attempt {attempt+1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    continue
+                else:
+                    return page, [], f"HTTP {response.status_code}"
+
+        except cffi_requests.exceptions.Timeout:
+            logger.warning(f"  ⚠ Page {page}: Timeout after {timeout}s (attempt {attempt+1}/{max_retries})")
+            if attempt >= max_retries - 1:
+                return page, [], f"Timeout after {max_retries} attempts"
+
+        except cffi_requests.exceptions.ConnectionError as e:
+            err_str = str(e)[:60]
+            logger.warning(f"  ⚠ Page {page}: Connection error: {err_str} (attempt {attempt+1}/{max_retries})")
+            if attempt >= max_retries - 1:
+                return page, [], f"Connection error: {str(e)[:100]}"
+
+        except Exception as e:
+            err_str = str(e)[:100]
+            logger.error(f"  ✗ Page {page}: Unexpected error: {err_str} (attempt {attempt+1}/{max_retries})")
+            if attempt >= max_retries - 1:
+                return page, [], err_str
+
+    return page, [], f"Failed after {max_retries} attempts"
+
+
+def save_drugs_batch(conn: sqlite3.Connection, job_id: str, drugs: list) -> int:
+    """
+    Save batch of drugs ke database
+    Return: jumlah rows yang berhasil disimpan
+    """
+    if not drugs or not isinstance(drugs, list):
+        return 0
+
+    rows_to_insert = []
+
+    for drug in drugs:
+        if not isinstance(drug, dict):
+            continue
+
+        try:
+            # Nested object parsing
+            company = drug.get("company", {}) or {}
+            country_obj = company.get("country", {}) or {}
+            drug_type = drug.get("drugType", {}) or {}
+            auth_status = drug.get("authorizationStatus", {}) or {}
+            route = drug.get("administrationRoute", {}) or {}
+            dosage_form = drug.get("pharmaceuticalForm", {}) or {}
+
+            rows_to_insert.append((
+                job_id,
+                str(drug.get("registerNumber") or drug.get("registration_no") or ""),
+                str(drug.get("tradeName") or drug.get("trade_name") or ""),
+                str(drug.get("scientificName") or drug.get("scientific_name") or ""),
+                str(company.get("nameEn") or ""),
+                str(country_obj.get("nameEn") or ""),
+                str(drug_type.get("nameEn") or ""),
+                str(auth_status.get("nameEn") or ""),
+                str(company.get("nameEn") or ""),  # license_holder same as manufacturer
+                str(dosage_form.get("nameEn") or ""),
+                str(route.get("nameEn") or ""),
+                str(drug.get("strength") or ""),
+            ))
+        except Exception as e:
+            logger.warning(f"  ⚠ Parse error: {str(e)[:100]}, skipping drug")
+            continue
+
+    if rows_to_insert:
+        try:
+            conn.executemany("""
+                INSERT OR IGNORE INTO drugs
+                (job_id, registration_no, trade_name, scientific_name,
+                 manufacturer, country, category, status, license_holder,
+                 dosage_form, route, strength)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, rows_to_insert)
+            conn.commit()
+            logger.info(f"  ✓ Saved {len(rows_to_insert)} drugs to DB")
+            return len(rows_to_insert)
+        except Exception as e:
+            logger.error(f"  ✗ Save failed: {str(e)[:100]}")
+            return 0
+
+    return 0
+
+
+def run_scraper(
+    job_id: str,
+    max_pages: Optional[int] = None,
+    notify_telegram: bool = True
+):
+    """
+    Main scraper function — loop pages dengan backoff robust
+    """
+    conn = get_connection()
+    start_time = time.time()
+
+    try:
+        logger.info(f"🚀 SCRAPER START | Job={job_id} | max_pages={max_pages}")
+
+        # Probe page 1 untuk get total pages
+        page, first_drugs, error = fetch_page_with_backoff(1)
+
+        if error or not first_drugs:
+            raise Exception(f"Failed to fetch page 1: {error}")
+
+        # Update job dengan total pages
+        total_pages = max_pages or settings.sfda_max_pages
+        conn.execute(
+            """UPDATE jobs SET status='running', total_pages=?, started_at=datetime('now')
+               WHERE id=?""",
+            (total_pages, job_id)
+        )
+        conn.commit()
+
+        logger.info(f"📊 Will scrape {total_pages} pages | Got {len(first_drugs)} drugs from page 1")
+
+        # Save page 1
+        saved = save_drugs_batch(conn, job_id, first_drugs)
+        conn.execute(
+            "UPDATE jobs SET done_pages=1, total_drugs=? WHERE id=?",
+            (saved, job_id)
+        )
+        conn.commit()
+
+        if notify_telegram:
+            notify_job_started(job_id, total_pages)
+
+        # Scrape pages 2 onwards dengan thread pool
+        total_drugs = saved
+        pages_to_scrape = list(range(2, total_pages + 1))
+
+        for chunk_start in range(0, len(pages_to_scrape), CHUNK_SIZE):
+            chunk = pages_to_scrape[chunk_start:chunk_start + CHUNK_SIZE]
+
+            with ThreadPoolExecutor(max_workers=WORKERS) as executor:
+                futures = {
+                    executor.submit(fetch_page_with_backoff, page): page
+                    for page in chunk
+                }
+
+                for future in as_completed(futures):
+                    page_num, drugs, error = future.result()
+
+                    if error:
+                        logger.warning(f"  ⚠ Page {page_num} permanently failed: {error}")
+                    elif drugs:
+                        saved_count = save_drugs_batch(conn, job_id, drugs)
+                        total_drugs += saved_count
+                    else:
+                        logger.warning(f"  ⚠ Page {page_num} returned 0 drugs")
+
+                    # Update progress
+                    done = 1 + chunk_start + chunk.index(page_num) + 1
+                    conn.execute(
+                        "UPDATE jobs SET done_pages=?, total_drugs=? WHERE id=?",
+                        (done, total_drugs, job_id)
+                    )
+                    conn.commit()
+
+                    # Milestone notification setiap 100 halaman
+                    if notify_telegram and done % 100 == 0:
+                        notify_milestone(job_id, done, total_pages, total_drugs)
+
+            # Delay antar chunk untuk politeness
+            time.sleep(random.uniform(settings.sfda_delay_min, settings.sfda_delay_max))
+
+        # Mark as done
+        duration = time.time() - start_time
+        conn.execute(
+            """UPDATE jobs SET status='done', finished_at=datetime('now'),
+               total_drugs=?, done_pages=? WHERE id=?""",
+            (total_drugs, total_pages, job_id)
+        )
+        conn.commit()
+
+        logger.info(f"✅ SCRAPER DONE | Job={job_id} | {total_drugs} drugs | {duration:.0f}s")
+
+        if notify_telegram:
+            notify_job_done(job_id, total_drugs, duration, total_pages)
+
+    except Exception as e:
+        logger.error(f"❌ SCRAPER FAILED | Job={job_id} | {str(e)}", exc_info=True)
+
+        conn.execute(
+            "UPDATE jobs SET status='failed', error=?, finished_at=datetime('now') WHERE id=?",
+            (str(e)[:500], job_id)
+        )
+        conn.commit()
+
+        if notify_telegram:
+            notify_job_failed(job_id, str(e))
+
+    finally:
+        conn.close()
+
+
+def query_drugs(
+    job_id: str,
+    page: int = 1,
+    page_size: int = 50,
+    search: Optional[str] = None,
+    country: Optional[str] = None,
+    manufacturer: Optional[str] = None
+) -> dict:
+    """Query drugs dengan pagination dan filter"""
+    conn = get_connection()
+    try:
+        conditions = ["job_id = ?"]
+        params = [job_id]
+
+        if search:
+            conditions.append("(trade_name LIKE ? OR scientific_name LIKE ? OR registration_no LIKE ?)")
+            search_term = f"%{search}%"
+            params.extend([search_term, search_term, search_term])
+
+        if country:
+            conditions.append("country = ?")
+            params.append(country)
+
+        if manufacturer:
+            conditions.append("manufacturer LIKE ?")
+            params.append(f"%{manufacturer}%")
+
+        where_clause = " AND ".join(conditions)
+
+        # Count total
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM drugs WHERE {where_clause}",
+            params
+        ).fetchone()[0]
+
+        # Fetch dengan pagination
+        offset = (page - 1) * page_size
+        rows = conn.execute(
+            f"""SELECT registration_no, trade_name, scientific_name,
+                       manufacturer, country, category, status,
+                       license_holder, dosage_form, route, strength
+                FROM drugs WHERE {where_clause}
+                ORDER BY trade_name
+                LIMIT ? OFFSET ?""",
+            params + [page_size, offset]
+        ).fetchall()
+
+        return {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "pages": (total + page_size - 1) // page_size,
+            "data": [dict(r) for r in rows]
+        }
+    finally:
+        conn.close()

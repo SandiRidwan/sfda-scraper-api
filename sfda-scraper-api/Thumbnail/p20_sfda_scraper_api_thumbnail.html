@@ -1,0 +1,531 @@
+
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700;800&family=Inter:wght@400;500;600;700;900&display=swap');
+
+  .thumb-root {
+    width: 1920px;
+    height: 1080px;
+    background: #0a0f1e;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    font-family: 'Inter', sans-serif;
+  }
+
+  /* Grid dots background */
+  .thumb-root::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(circle, rgba(41,182,246,0.15) 1px, transparent 1px);
+    background-size: 48px 48px;
+  }
+
+  /* Glow blobs */
+  .blob-blue {
+    position: absolute;
+    width: 700px;
+    height: 700px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(41,182,246,0.18) 0%, transparent 70%);
+    top: -200px;
+    left: -100px;
+    pointer-events: none;
+  }
+  .blob-teal {
+    position: absolute;
+    width: 600px;
+    height: 600px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(29,158,117,0.14) 0%, transparent 70%);
+    bottom: -150px;
+    right: 300px;
+    pointer-events: none;
+  }
+  .blob-purple {
+    position: absolute;
+    width: 500px;
+    height: 500px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(127,119,221,0.12) 0%, transparent 70%);
+    top: 200px;
+    right: 100px;
+    pointer-events: none;
+  }
+
+  /* Left content panel */
+  .left-panel {
+    position: relative;
+    z-index: 10;
+    flex: 0 0 1100px;
+    padding: 80px 80px 80px 100px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  /* Top badge */
+  .top-badge {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 32px;
+  }
+  .badge-pill {
+    background: rgba(41,182,246,0.15);
+    border: 1px solid rgba(41,182,246,0.4);
+    color: #29b6f6;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 18px;
+    font-weight: 700;
+    padding: 6px 20px;
+    border-radius: 100px;
+    letter-spacing: 0.05em;
+  }
+  .badge-sep {
+    width: 32px;
+    height: 1px;
+    background: rgba(255,255,255,0.2);
+  }
+  .badge-label {
+    color: rgba(255,255,255,0.5);
+    font-size: 18px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  /* Main title */
+  .main-title {
+    font-size: 96px;
+    font-weight: 900;
+    line-height: 1.0;
+    color: #fff;
+    margin: 0 0 10px;
+    letter-spacing: -2px;
+  }
+  .main-title .highlight {
+    color: #29b6f6;
+  }
+
+  .sub-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 28px;
+    font-weight: 400;
+    color: rgba(255,255,255,0.55);
+    margin: 0 0 40px;
+    letter-spacing: 0.02em;
+  }
+  .sub-title span {
+    color: #1de9b6;
+  }
+
+  /* Divider */
+  .divider {
+    width: 80px;
+    height: 3px;
+    background: linear-gradient(90deg, #29b6f6, #1de9b6);
+    border-radius: 2px;
+    margin-bottom: 48px;
+  }
+
+  /* Features grid */
+  .features-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px 40px;
+    margin-bottom: 56px;
+  }
+  .feature-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+  }
+  .feat-icon {
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: rgba(41,182,246,0.12);
+    border: 1px solid rgba(41,182,246,0.25);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    margin-top: 2px;
+  }
+  .feat-text {}
+  .feat-title {
+    font-size: 20px;
+    font-weight: 700;
+    color: #fff;
+    line-height: 1.2;
+    margin-bottom: 3px;
+  }
+  .feat-desc {
+    font-size: 16px;
+    color: rgba(255,255,255,0.45);
+    line-height: 1.4;
+  }
+
+  /* Stats row */
+  .stats-row {
+    display: flex;
+    gap: 40px;
+  }
+  .stat-box {
+    display: flex;
+    flex-direction: column;
+  }
+  .stat-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 44px;
+    font-weight: 800;
+    color: #29b6f6;
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+  .stat-label {
+    font-size: 14px;
+    color: rgba(255,255,255,0.4);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+  .stat-divider {
+    width: 1px;
+    background: rgba(255,255,255,0.1);
+    align-self: stretch;
+  }
+
+  /* Right panel — code mockup */
+  .right-panel {
+    position: relative;
+    z-index: 10;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 60px 80px 60px 20px;
+    gap: 20px;
+  }
+
+  /* Terminal card */
+  .terminal-card {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
+    overflow: hidden;
+  }
+  .terminal-header {
+    background: rgba(255,255,255,0.05);
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+  }
+  .dot-r { background: #ff5f57; }
+  .dot-y { background: #febc2e; }
+  .dot-g { background: #28c840; }
+  .terminal-title {
+    margin-left: 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+    color: rgba(255,255,255,0.4);
+  }
+  .terminal-body {
+    padding: 20px 24px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 16px;
+    line-height: 1.8;
+  }
+  .kw { color: #c792ea; }
+  .fn { color: #82aaff; }
+  .str { color: #c3e88d; }
+  .cm { color: rgba(255,255,255,0.3); }
+  .nb { color: #f78c6c; }
+  .pl { color: #1de9b6; }
+  .tx { color: rgba(255,255,255,0.75); }
+
+  /* API endpoint chips */
+  .api-chips {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .api-chip {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 10px;
+    padding: 12px 18px;
+  }
+  .method {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 5px;
+    min-width: 52px;
+    text-align: center;
+  }
+  .method-post { background: rgba(255,152,0,0.2); color: #ffa726; border: 1px solid rgba(255,152,0,0.3);}
+  .method-get { background: rgba(29,158,117,0.2); color: #1de9b6; border: 1px solid rgba(29,158,117,0.3);}
+  .endpoint-path {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 15px;
+    color: rgba(255,255,255,0.7);
+    flex: 1;
+  }
+  .endpoint-desc {
+    font-size: 13px;
+    color: rgba(255,255,255,0.3);
+  }
+
+  /* Stack pills */
+  .stack-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 4px;
+  }
+  .stack-pill {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.6);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    padding: 4px 14px;
+    border-radius: 100px;
+  }
+  .stack-pill.hl { background: rgba(41,182,246,0.1); border-color: rgba(41,182,246,0.3); color: #29b6f6; }
+
+  /* Author bar */
+  .author-bar {
+    position: absolute;
+    bottom: 48px;
+    left: 100px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    z-index: 20;
+  }
+  .author-avatar {
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #29b6f6, #1de9b6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: 18px;
+    color: #0a0f1e;
+  }
+  .author-info {}
+  .author-name {
+    font-size: 18px;
+    font-weight: 700;
+    color: #fff;
+  }
+  .author-role {
+    font-size: 14px;
+    color: rgba(255,255,255,0.4);
+  }
+
+  /* Bottom right GitHub */
+  .github-bar {
+    position: absolute;
+    bottom: 56px;
+    right: 80px;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .github-text {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 16px;
+    color: rgba(255,255,255,0.35);
+  }
+
+  /* Vertical line separator */
+  .vert-line {
+    position: absolute;
+    top: 60px;
+    bottom: 60px;
+    left: 1100px;
+    width: 1px;
+    background: linear-gradient(180deg, transparent, rgba(41,182,246,0.3) 30%, rgba(41,182,246,0.3) 70%, transparent);
+    z-index: 5;
+  }
+</style>
+
+<div class="thumb-root">
+  <div class="blob-blue"></div>
+  <div class="blob-teal"></div>
+  <div class="blob-purple"></div>
+  <div class="vert-line"></div>
+
+  <!-- LEFT PANEL -->
+  <div class="left-panel">
+    <div class="top-badge">
+      <div class="badge-pill">PROJECT 20</div>
+      <div class="badge-sep"></div>
+      <div class="badge-label">Portfolio · Web Scraping</div>
+    </div>
+
+    <div class="main-title">
+      SFDA Drug<br><span class="highlight">Scraper API</span>
+    </div>
+    <div class="sub-title">
+      FastAPI · Docker · <span>curl_cffi</span> · Playwright
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="features-grid">
+      <div class="feature-item">
+        <div class="feat-icon">🔐</div>
+        <div class="feat-text">
+          <div class="feat-title">TLS Fingerprint Bypass</div>
+          <div class="feat-desc">curl_cffi Chrome impersonation — lolos JA3 detection</div>
+        </div>
+      </div>
+      <div class="feature-item">
+        <div class="feat-icon">🕵️</div>
+        <div class="feat-text">
+          <div class="feat-title">Hidden POST Pagination</div>
+          <div class="feat-desc">Discovery via Playwright request interceptor</div>
+        </div>
+      </div>
+      <div class="feature-item">
+        <div class="feat-icon">⚡</div>
+        <div class="feat-text">
+          <div class="feat-title">Production REST API</div>
+          <div class="feat-desc">Async job tracking · 202 Accepted pattern</div>
+        </div>
+      </div>
+      <div class="feature-item">
+        <div class="feat-icon">🐳</div>
+        <div class="feat-text">
+          <div class="feat-title">Docker Multi-Stage Build</div>
+          <div class="feat-desc">Session warmup + anti-block pattern</div>
+        </div>
+      </div>
+      <div class="feature-item">
+        <div class="feat-icon">📊</div>
+        <div class="feat-text">
+          <div class="feat-title">Multi-Format Export</div>
+          <div class="feat-desc">Excel · CSV · JSON · Parquet (gzip)</div>
+        </div>
+      </div>
+      <div class="feature-item">
+        <div class="feat-icon">🔔</div>
+        <div class="feat-text">
+          <div class="feat-title">Telegram Alerts</div>
+          <div class="feat-desc">Real-time progress notifications per 100 pages</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="stats-row">
+      <div class="stat-box">
+        <div class="stat-num">8,760</div>
+        <div class="stat-label">Drug Records</div>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="stat-box">
+        <div class="stat-num">438</div>
+        <div class="stat-label">Pages Scraped</div>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="stat-box">
+        <div class="stat-num">33m</div>
+        <div class="stat-label">Runtime</div>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="stat-box">
+        <div class="stat-num">11</div>
+        <div class="stat-label">Fields/Drug</div>
+      </div>
+    </div>
+
+    <div class="author-bar">
+      <div class="author-avatar">SR</div>
+      <div class="author-info">
+        <div class="author-name">Sandi Ridwan</div>
+        <div class="author-role">Data Automation Engineer · Web Scraping Specialist</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT PANEL -->
+  <div class="right-panel">
+    <!-- Code snippet -->
+    <div class="terminal-card">
+      <div class="terminal-header">
+        <div class="dot dot-r"></div>
+        <div class="dot dot-y"></div>
+        <div class="dot dot-g"></div>
+        <div class="terminal-title">sfda_post_scraper_v2.py</div>
+      </div>
+      <div class="terminal-body">
+        <div><span class="cm"># POST form-encoded pagination discovery</span></div>
+        <div><span class="kw">session</span> = <span class="fn">Session</span>(<span class="pl">impersonate</span>=<span class="str">"chrome120"</span>)</div>
+        <div><span class="cm"># session warmup — bypass cold IP block</span></div>
+        <div><span class="kw">session</span>.<span class="fn">get</span>(<span class="str">"sfda.gov.sa/en/drugs-list"</span>)</div>
+        <div>&nbsp;</div>
+        <div><span class="pl">payload</span> = {<span class="str">"TradeName"</span>: <span class="str">""</span>, <span class="str">"page"</span>: <span class="nb">N</span>}</div>
+        <div><span class="pl">resp</span> = <span class="kw">session</span>.<span class="fn">post</span>(<span class="str">"/GetDrugs.php"</span>, <span class="pl">data</span>=<span class="pl">payload</span>)</div>
+      </div>
+    </div>
+
+    <!-- API Endpoints -->
+    <div class="api-chips">
+      <div class="api-chip">
+        <div class="method method-post">POST</div>
+        <div class="endpoint-path">/scraper/scrape</div>
+        <div class="endpoint-desc">Start async job → returns job_id</div>
+      </div>
+      <div class="api-chip">
+        <div class="method method-get">GET</div>
+        <div class="endpoint-path">/scraper/status/{job_id}</div>
+        <div class="endpoint-desc">Real-time progress tracking</div>
+      </div>
+      <div class="api-chip">
+        <div class="method method-get">GET</div>
+        <div class="endpoint-path">/drugs/export/{job_id}</div>
+        <div class="endpoint-desc">StreamingResponse Excel download</div>
+      </div>
+      <div class="api-chip">
+        <div class="method method-get">GET</div>
+        <div class="endpoint-path">/drugs/stats</div>
+        <div class="endpoint-desc">Aggregated data quality report</div>
+      </div>
+    </div>
+
+    <!-- Stack pills -->
+    <div class="stack-row">
+      <div class="stack-pill hl">FastAPI</div>
+      <div class="stack-pill hl">curl_cffi</div>
+      <div class="stack-pill hl">Docker</div>
+      <div class="stack-pill">Playwright</div>
+      <div class="stack-pill">SQLite</div>
+      <div class="stack-pill">Pydantic v2</div>
+      <div class="stack-pill">Pandas</div>
+      <div class="stack-pill">Uvicorn</div>
+    </div>
+
+    <div class="github-bar">
+      <div class="github-text">github.com/sandiridwan/sfda-scraper-api</div>
+    </div>
+  </div>
+</div>
