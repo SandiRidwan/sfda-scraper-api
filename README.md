@@ -22,7 +22,7 @@
 
 <div align="center">
   <a href="https://youtube.com/watch?v=-kWFCRtUua8">
-    <img src="thumbnail.png" width="860" alt="Watch full demo on YouTube" />
+    <img src="Thumbnail.png" width="860" alt="Watch full demo on YouTube" />
   </a>
   <br/>
   <sub><i>Click to watch — scraper run, monitor progress, Excel output walkthrough</i></sub>
